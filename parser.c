@@ -1,86 +1,119 @@
 #include "shell.h"
-
 /**
- * is_cmd - determines if a file is an executable command
- * @info: the info struct
- * @path: path to the file
- *
- * Return: 1 if true, 0 otherwise
+ * _getline - gets line from STDIN and places it in the buffer
+ * @file: int assigned to the read of STDIN
+ * Return: pointer to buffer with formatted input from STDIN
  */
-int is_cmd(info_t *info, char *path)
+char *_getline(int file)
 {
-	struct stat st;
+	unsigned int i, index;
+	char *buffer;
+	static unsigned int buffer_size = BUFSIZE;
 
-	(void)info;
-	if (!path || stat(path, &st))
-		return (0);
-
-	if (st.st_mode & S_IFREG)
+	buffer = malloc(sizeof(char) * buffer_size);
+	if (buffer == NULL)
 	{
-		return (1);
-	}
-	return (0);
-}
-
-/**
- * dup_chars - duplicates characters
- * @pathstr: the PATH string
- * @start: starting index
- * @stop: stopping index
- *
- * Return: pointer to new buffer
- */
-char *dup_chars(char *pathstr, int start, int stop)
-{
-	static char buf[1024];
-	int i = 0, k = 0;
-
-	for (k = 0, i = start; i < stop; i++)
-		if (pathstr[i] != ':')
-			buf[k++] = pathstr[i];
-	buf[k] = 0;
-	return (buf);
-}
-
-/**
- * find_path - finds this cmd in the PATH string
- * @info: the info struct
- * @pathstr: the PATH string
- * @cmd: the cmd to find
- *
- * Return: full path of cmd if found or NULL
- */
-char *find_path(info_t *info, char *pathstr, char *cmd)
-{
-	int i = 0, curr_pos = 0;
-	char *path;
-
-	if (!pathstr)
+		perror("malloc for buffer failed\n");
 		return (NULL);
-	if ((_strlen(cmd) > 2) && starts_with(cmd, "./"))
-	{
-		if (is_cmd(info, cmd))
-			return (cmd);
 	}
+	index = 0;
+	_memset(buffer, '\0', buffer_size);
+	while ((i = read(file, buffer + index, buffer_size - index)) > 0)
+	{
+
+		if (i < (buffer_size - index))
+			return (buffer);
+		buffer_size *= 2;
+		_realloc(buffer, buffer_size, buffer_size / 2);
+		if (buffer == NULL)
+		{
+			perror("realloc failed\n");
+			return (NULL);
+		}
+		index += i;
+	}
+	if (i == 0)
+		_memcpy(buffer, "exit", 5);
+	return (buffer);
+}
+/**
+  * parser - parses a string into tokens
+  * @str: string to parse
+  * @delimit: delimiters chosen by user
+  * Return: Double pointer to array of tokens
+  */
+char **parser(char *str, char *delimit)
+{
+	char **tokenized, *saveptr, *token;
+	unsigned int i, wc;
+
+	wc = word_count(str);
+	tokenized = malloc((wc + 1) * sizeof(char *));
+	if (!tokenized)
+	{
+		perror("malloc failed\n");
+		return (NULL);
+	}
+	tokenized[0] = token = _strtok_r(str, delimit, &saveptr);
+	for (i = 1; token; i++)
+		tokenized[i] = token = _strtok_r(NULL, delimit, &saveptr);
+	return (tokenized);
+}
+/** Global variable: Flag, to handle interrupt signals **/
+unsigned char sig_flag = 0;
+/**
+  * sighandler - handles signals from keyboard interrupts
+  * @sig: the signal caught
+  */
+static void sighandler(int sig)
+{
+
+	if (sig == SIGINT && sig_flag == 0)
+		simple_print("\nAnd baby says: ");
+	else if (sig_flag != 0)
+		simple_print("\n");
+}
+/**
+  * main - entry point
+  * Return: 0 on successful termination. -1 on failure.
+  */
+int main(void)
+{
+	char pipe_flag, *buffer, *cmds, *saveptr, **tokens;
+	env_t *linkedlist_path;
+	struct stat fstat_buf;
+
+	if (signal(SIGINT, sighandler) == SIG_ERR)
+		perror("signal error\n");
+	if (fstat(STDIN_FILENO, &fstat_buf) == -1)
+		perror("fstat error\n"), exit(98);
+	pipe_flag = (fstat_buf.st_mode & S_IFMT) == S_IFCHR ? 0 : 1;
+	linkedlist_path = list_from_path();
+	if (linkedlist_path == NULL)
+		return (-1);
+	saveptr = NULL;
 	while (1)
 	{
-		if (!pathstr[i] || pathstr[i] == ':')
+		sig_flag = 0;
+		if (pipe_flag == 0)
+			simple_print("And baby says: ");
+		buffer = _getline(STDIN_FILENO);
+		if (!buffer)
+			break;
+		cmds = _strtok_r(buffer, "\n;", &saveptr);
+		while (cmds)
 		{
-			path = dup_chars(pathstr, curr_pos, i);
-			if (!*path)
-				_strcat(path, cmd);
-			else
-			{
-				_strcat(path, "/");
-				_strcat(path, cmd);
-			}
-			if (is_cmd(info, path))
-				return (path);
-			if (!pathstr[i])
+			tokens = parser(cmds, "\t ");
+			if (!tokens)
 				break;
-			curr_pos = i;
+			if (is_builtin(tokens[0]))
+				is_builtin(tokens[0])(tokens, linkedlist_path, cmds);
+			else
+				sig_flag = 1, executor(tokens, linkedlist_path);
+			free(tokens);
+			cmds = _strtok_r(NULL, "\n;", &saveptr);
 		}
-		i++;
+		free(buffer);
 	}
-	return (NULL);
+	return (0);
 }
